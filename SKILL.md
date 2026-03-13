@@ -78,7 +78,52 @@ node scripts/tomato.js list-books
 ```
 返回作品 bookId 列表，发布章节时需要用到。
 
-### 发布章节
+### 查看章节列表
+```bash
+node scripts/tomato.js list-chapters --book-id 7614138753522617369
+```
+返回所有章节的 ID、标题、字数、审核状态、发布时间。
+
+### 查看章节详情
+```bash
+node scripts/tomato.js chapter-info \
+  --book-id 7614138753522617369 \
+  --chapter-id 7654321000000000001
+```
+返回单章的字数、标题、审核状态、发布时间。
+
+### 修改章节内容
+```bash
+# 仅改标题
+node scripts/tomato.js edit-chapter \
+  --book-id 7614138753522617369 \
+  --chapter-id 7654321000000000001 \
+  --title "新章节标题"
+
+# 仅改正文（从文件读取）
+node scripts/tomato.js edit-chapter \
+  --book-id 7614138753522617369 \
+  --chapter-id 7654321000000000001 \
+  --content-file /path/to/new-content.txt
+
+# 标题 + 正文一起改
+node scripts/tomato.js edit-chapter \
+  --book-id 7614138753522617369 \
+  --chapter-id 7654321000000000001 \
+  --title "新标题" \
+  --content-file /path/to/new-content.txt
+```
+修改后会重新走发布流程，状态变为**审核中**。
+
+### 删除章节
+```bash
+node scripts/tomato.js delete-chapter \
+  --book-id 7614138753522617369 \
+  --chapter-id 7654321000000000001
+```
+⚠️ 删除不可恢复，请提前用 `list-chapters` 确认章节 ID。
+
+---
 ```bash
 # 正文直接传入
 node scripts/tomato.js publish-chapter \
