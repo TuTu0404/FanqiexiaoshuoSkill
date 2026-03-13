@@ -230,7 +230,33 @@ page.evaluate((cid) => {
 
 ---
 
-### P001｜"继续编辑"弹窗导致 edit-chapter 流程卡死
+### C003｜delete-chapter 删除按钮选择器错误
+
+**症状**：`locator.click: Timeout 5000ms exceeded`
+
+**根因**：删除按钮实际是 `<span class="icon-delete tomato-delete">` 而非 `button`，原选择器 `button:has-text("删除")` 匹配不到
+
+**修复**：改为 `span.icon-delete, span.tomato-delete, [class*="icon-delete"]`
+
+**状态**：✅ 已修复（2026-03-13）
+
+---
+
+### P002｜edit-chapter 标题重复（"第1章 第1章 ..."）
+
+**症状**：修改标题后 list-chapters 显示 `第1章 第1章 冰川融化...`
+
+**根因**：标题 input 里已有旧值（含序号前缀），`selectText()`/三击全选/`Ctrl+A+Backspace` 等键盘方式均无法完全清空 React 受控组件的值
+
+**修复**：改用 `nativeInputValueSetter` + 手动触发 `input/change` 事件强制替换值：
+```js
+const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+nativeInputValueSetter.call(input, newTitle);
+input.dispatchEvent(new Event('input', { bubbles: true }));
+input.dispatchEvent(new Event('change', { bubbles: true }));
+```
+
+**状态**：✅ 已修复（2026-03-13）
 
 **症状**：`ok: false`，after 截图可见弹窗遮挡"下一步"，字数显示 0
 

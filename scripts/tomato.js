@@ -129,13 +129,26 @@ async function getWordCount(page) {
  * ⚠️ 必须先选"是否使用AI"，否则点"确认发布"后章节不发布（静默失败，0章）
  */
 async function runPublishFlow(page) {
-  // 先点顶部"下一步"
+  // 先点顶部"下一步"（若有"继续编辑"弹窗先处理）
+  if (await page.locator('button:has-text("继续编辑")').count() > 0) {
+    await page.locator('button:has-text("继续编辑")').click();
+    await page.waitForTimeout(1000);
+    console.error('[flow] 处理继续编辑弹窗');
+  }
   await page.locator('button:has-text("下一步")').first().click({ force: true, timeout: 8000 });
   await page.waitForTimeout(2500);
 
   let published = false;
 
   for (let step = 0; step < 12; step++) {
+    // 每轮先检查"继续编辑"弹窗
+    if (await page.locator('button:has-text("继续编辑")').count() > 0) {
+      await page.locator('button:has-text("继续编辑")').click();
+      await page.waitForTimeout(1000);
+      console.error('[flow] 中途处理继续编辑弹窗');
+      continue;
+    }
+
     const btns = await page.evaluate(() =>
       Array.from(document.querySelectorAll('button'))
         .filter(b => b.offsetParent !== null)
@@ -508,48 +521,49 @@ async function cmdListChapters(bookId) {
     }
 
     const chapters = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('.chapter-list-item, .chapter-item, [class*="chapter-row"]'))
-        .filter(el => el.offsetParent !== null)
-        .map(el => {
-          // 提取章节 ID（从编辑链接 href 中）
-          const editLink = el.querySelector('a[href*="/publish/"]') || el.querySelector('a[href*="/edit/"]');
-          const chapterIdMatch = editLink?.href.match(/\/(\d{10,})\/?/);
-          const chapterId = chapterIdMatch?.[1] || null;
+      // 通过章节预览链接找到所有章节行（arco-table-tr）
+      const allLinks = Array.from(document.querySelectorAll('a[href*="/preview/"]'));
+      return allLinks.map(link => {
+        const row = link.closest('tr, .arco-table-tr, [class*="table-tr"]');
 
-          // 提取标题
-          const titleEl = el.querySelector('.chapter-title, [class*="title"]');
-          const title = titleEl?.innerText?.trim() || '';
+        // 章节 ID：从同行的编辑链接提取
+        const editLink = row?.querySelector('a[href*="/publish/"][href*="modifychapter"]');
+        const chapterIdMatch = editLink?.href.match(/\/publish\/(\d{10,})\//);
+        const chapterId = chapterIdMatch?.[1] || null;
 
-          // 提取字数
-          const wcMatch = el.innerText.match(/(\d+)\s*字/);
-          const wordCount = wcMatch ? parseInt(wcMatch[1]) : null;
+        // 标题：从预览链接文字取
+        const title = link.innerText?.trim() || '';
 
-          // 提取审核状态（审核中 / 已发布 / 未发布 / 审核失败 等）
-          const statusEl = el.querySelector('[class*="status"], [class*="state"]');
-          const status = statusEl?.innerText?.trim() || '';
+        // 所有 td 列：字数、错别字、审核状态、发布时间
+        const tds = row ? Array.from(row.querySelectorAll('td')) : [];
+        const wordCount = tds[1] ? parseInt(tds[1].innerText?.trim()) || null : null;
+        const status = tds[3] ? tds[3].innerText?.trim() : '';
+        const publishTime = tds[4] ? tds[4].innerText?.trim() : null;
 
-          // 提取发布时间
-          const timeMatch = el.innerText.match(/(\d{4}[-/]\d{2}[-/]\d{2}[\s\d:]*)/);
-          const publishTime = timeMatch?.[1]?.trim() || null;
-
-          return { chapterId, title, wordCount, status, publishTime };
-        })
-        .filter(c => c.title);
+        return { chapterId, title, wordCount, status, publishTime };
+      }).filter(c => c.title);
     });
 
-    console.log(JSON.stringify({ ok: true, bookId, total: chapters.length, chapters }));
+    if (chapters.length === 0) {
+      console.log('暂无章节。');
+      return;
+    }
+
+    const lines = [`共 ${chapters.length} 章：`];
+    chapters.forEach((c, i) => {
+      lines.push(`  ${i + 1}. ${c.title}`);
+    });
+    console.log(lines.join('\n'));
   });
 }
 
 /**
- * 查看单章详情（字数、标题、审核状态、发布时间）
- * 直接访问章节编辑页读取信息
+ * 查看单章详情 - 复用 list-chapters 逻辑，按 chapterId 过滤
  */
 async function cmdChapterInfo(bookId, chapterId) {
   await withAuth(async (context) => {
     const page = await context.newPage();
-    // 先从章节列表页获取该章详情
-    await page.goto(`${BASE_URL}/main/writer/chapter-manage/${bookId}`, { waitUntil: 'networkidle', timeout: 25000 });
+    await page.goto(BASE_URL + '/main/writer/chapter-manage/' + bookId, { waitUntil: 'networkidle', timeout: 25000 });
     await page.waitForTimeout(2000);
 
     if (page.url().includes('login')) {
@@ -557,37 +571,43 @@ async function cmdChapterInfo(bookId, chapterId) {
       return;
     }
 
-    await page.evaluate(() => document.querySelector('#___reactour')?.remove());
+    await page.evaluate(() => document.querySelector('#___reactour') && document.querySelector('#___reactour').remove());
     if (await page.locator('button:has-text("我知道了")').count() > 0) {
       await page.locator('button:has-text("我知道了")').click();
       await page.waitForTimeout(500);
     }
 
-    const info = await page.evaluate((cid) => {
-      const rows = Array.from(document.querySelectorAll('.chapter-list-item, .chapter-item, [class*="chapter-row"]'))
-        .filter(el => el.offsetParent !== null);
-      for (const el of rows) {
-        const editLink = el.querySelector('a[href*="/publish/"]') || el.querySelector('a[href*="/edit/"]');
-        const m = editLink?.href.match(/\/(\d{10,})\/?/);
-        if (m?.[1] === cid) {
-          const title = el.querySelector('.chapter-title, [class*="title"]')?.innerText?.trim() || '';
-          const wcMatch = el.innerText.match(/(\d+)\s*字/);
-          const wordCount = wcMatch ? parseInt(wcMatch[1]) : null;
-          const statusEl = el.querySelector('[class*="status"], [class*="state"]');
-          const status = statusEl?.innerText?.trim() || '';
-          const timeMatch = el.innerText.match(/(\d{4}[-/]\d{2}[-/]\d{2}[\s\d:]*)/);
-          const publishTime = timeMatch?.[1]?.trim() || null;
-          return { chapterId: cid, title, wordCount, status, publishTime };
-        }
-      }
-      return null;
-    }, chapterId);
+    // 与 list-chapters 相同的提取逻辑
+    const chapters = await page.evaluate(() => {
+      const allLinks = Array.from(document.querySelectorAll('a[href*="/preview/"]'));
+      return allLinks.map(function(link) {
+        const row = link.closest('tr');
+        const editLinks = row ? Array.from(row.querySelectorAll('a[href]')) : [];
+        const editLink = editLinks.find(function(a) { return a.href.indexOf('/publish/') > -1 && a.href.indexOf('modifychapter') > -1; });
+        const chapterIdMatch = editLink && editLink.href.match(/\/publish\/(\d{10,})\//);
+        const chapterId = chapterIdMatch ? chapterIdMatch[1] : null;
+        const title = link.innerText ? link.innerText.trim() : '';
+        const tds = row ? Array.from(row.querySelectorAll('td')) : [];
+        const wordCount = tds[1] ? (parseInt(tds[1].innerText.trim()) || null) : null;
+        const status = tds[3] ? tds[3].innerText.trim() : '';
+        const publishTime = tds[4] ? tds[4].innerText.trim() : null;
+        return { chapterId: chapterId, title: title, wordCount: wordCount, status: status, publishTime: publishTime };
+      }).filter(function(c) { return c.title; });
+    });
 
+    const info = chapters.find(c => c.chapterId === chapterId);
     if (!info) {
-      console.log(JSON.stringify({ ok: false, message: `未找到章节 ID: ${chapterId}，请先用 list-chapters 确认 ID` }));
+      console.log('未找到章节 ID：' + chapterId + '，请先用 list-chapters 查看正确的章节 ID。');
       return;
     }
-    console.log(JSON.stringify({ ok: true, bookId, ...info }));
+    console.log([
+      '章节详情：',
+      '  标题：' + info.title,
+      '  章节ID：' + info.chapterId,
+      '  字数：' + (info.wordCount != null ? info.wordCount + ' 字' : '未知'),
+      '  状态：' + (info.status || '未知'),
+      '  发布时间：' + (info.publishTime || '未知'),
+    ].join('\n'));
   });
 }
 
@@ -616,15 +636,34 @@ async function cmdEditChapter(bookId, chapterId, newTitle, newContent) {
 
     await page.evaluate(() => document.querySelector('#___reactour')?.remove());
 
+    // 处理弹窗："是否继续编辑？" → 点"继续编辑"；"是否放弃草稿？" → 点"放弃"
+    if (await page.locator('button:has-text("继续编辑")').count() > 0) {
+      await page.locator('button:has-text("继续编辑")').click();
+      await page.waitForTimeout(1000);
+      console.error('[edit] 已点击继续编辑');
+    } else if (await page.locator('button:has-text("放弃")').count() > 0) {
+      await page.locator('button:has-text("放弃")').click();
+      await page.waitForTimeout(1000);
+      console.error('[edit] 已放弃旧草稿');
+    }
+
     // 修改标题
     if (newTitle) {
       const titleInput = page.locator('input.serial-editor-input-hint-area').first();
       await titleInput.waitFor({ state: 'visible', timeout: 8000 });
-      await titleInput.selectText();
-      await page.keyboard.type(newTitle);
+      // 用 React nativeInputValueSetter 强制清空再赋值，触发 React onChange
+      await page.evaluate((val) => {
+        const input = document.querySelector('input.serial-editor-input-hint-area');
+        if (!input) return;
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        nativeInputValueSetter.call(input, val);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }, newTitle);
       await page.keyboard.press('Tab');
       await page.waitForTimeout(300);
-      console.error(`[edit] 标题已改为: ${newTitle}`);
+      const actual = await titleInput.inputValue();
+      console.error('[edit] 标题已改为: ' + actual);
     }
 
     // 修改正文
@@ -692,27 +731,19 @@ async function cmdDeleteChapter(bookId, chapterId) {
       await page.waitForTimeout(500);
     }
 
-    // 找到对应章节行
-    const rows = page.locator('.chapter-list-item, .chapter-item, [class*="chapter-row"]');
-    const count = await rows.count();
-    let targetIdx = -1;
-    for (let i = 0; i < count; i++) {
-      const el = rows.nth(i);
-      const editLink = await el.locator('a[href*="/publish/"], a[href*="/edit/"]').first().getAttribute('href').catch(() => '');
-      if (editLink?.includes(chapterId)) { targetIdx = i; break; }
-    }
-
-    if (targetIdx < 0) {
+    // 通过编辑链接精准定位目标行
+    const targetRow = page.locator('a[href*="/publish/"][href*="' + chapterId + '"]').locator('xpath=ancestor::tr').first();
+    if (await targetRow.count() === 0) {
       console.log(JSON.stringify({ ok: false, message: `未找到章节 ID: ${chapterId}，请先用 list-chapters 确认 ID` }));
       return;
     }
 
     // hover 触发操作图标
-    await rows.nth(targetIdx).hover();
+    await targetRow.hover();
     await page.waitForTimeout(300);
 
-    // 点删除图标
-    const deleteBtn = rows.nth(targetIdx).locator('i[class*="delete"], button[class*="delete"], [class*="delete-btn"]').first();
+    // 点删除图标（span.icon-delete / .tomato-delete）
+    const deleteBtn = targetRow.locator('span.icon-delete, span.tomato-delete, [class*="icon-delete"]').first();
     await deleteBtn.click({ timeout: 5000 });
     await page.waitForTimeout(1000);
 
@@ -728,9 +759,9 @@ async function cmdDeleteChapter(bookId, chapterId) {
     }
 
     // 验证是否已删除
+    await page.waitForTimeout(1000);
     const remaining = await page.evaluate((cid) => {
-      return Array.from(document.querySelectorAll('a[href*="/publish/"], a[href*="/edit/"]'))
-        .some(a => a.href.includes(cid));
+      return !!document.querySelector('a[href*="/publish/"][href*="' + cid + '"]');
     }, chapterId);
 
     console.log(JSON.stringify({
