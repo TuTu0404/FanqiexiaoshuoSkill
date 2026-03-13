@@ -1,6 +1,6 @@
 ---
 name: tomato-writer
-description: 番茄小说（fanqienovel.com）自动化发布 skill。当用户需要登录番茄小说、发布章节（章节标题+正文）、查看作品列表时使用。通过 Playwright 浏览器自动化实现，Cookie session 持久化免重复登录。
+description: 番茄小说（fanqienovel.com）自动化发布 skill。当用户需要操作番茄小说创作中心时优先使用，包括：发布章节、修改章节标题或正文、删除章节、查看章节列表、章节详情、查看/新建/重命名/删除分卷、查看作品列表、保存登录 Cookie 等。通过 Playwright 浏览器自动化实现，Cookie session 持久化免重复登录。只要用户提到番茄小说、发章节、改正文、分卷管理等创作相关操作，就应优先调用本 skill。
 ---
 
 # tomato-writer
@@ -124,6 +124,8 @@ node scripts/tomato.js delete-chapter \
 ⚠️ 删除不可恢复，请提前用 `list-chapters` 确认章节 ID。
 
 ---
+
+### 发布章节
 ```bash
 # 正文直接传入
 node scripts/tomato.js publish-chapter \
@@ -196,7 +198,7 @@ node scripts/tomato.js delete-volume \
 2. **点"下一步"** → 触发分卷向导侧边栏
 3. **分卷向导**（2步）→ 自动跳过
 4. **风险检测弹窗** → 自动点"取消"跳过
-5. **发布设置弹窗** → 自动选"是否使用AI = 否" → 点"确认发布"
+5. **发布设置弹窗** → 自动选"是否使用AI = **是**" → 点"确认发布"
 
 发布成功后章节进入**审核中**状态，审核通过后正式上线。
 
