@@ -551,7 +551,7 @@ async function cmdListChapters(bookId) {
 
     const lines = [`共 ${chapters.length} 章：`];
     chapters.forEach((c, i) => {
-      lines.push(`  ${i + 1}. ${c.title}`);
+      lines.push(`  ${i + 1}. ${c.title}（ID: ${c.chapterId || '未知'}）`);
     });
     console.log(lines.join('\n'));
   });
