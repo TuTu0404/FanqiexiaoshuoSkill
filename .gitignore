@@ -1,0 +1,8 @@
+# 本地配置文件，不上传 git
+local-config.md
+
+# 调试截图
+*.png
+
+# Node 依赖
+node_modules/

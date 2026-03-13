@@ -1,7 +1,20 @@
 # 番茄小说发布流程 - 完整指南与踩坑记录
 
-> 最后更新：2026-03-12
+> 最后更新：2026-03-13
 > 调试环境：headless Chromium (Playwright)，container 环境
+
+---
+
+## 快速问题索引（先看类别，再找具体）
+
+| # | 问题类别 | 关键词 |
+|---|---------|--------|
+| A | 登录 / Cookie | 过期、未找到session、login重定向 → [第三节](#三登录方式) |
+| B | 正文填写 | 字数=0、fill无效、keyboard不生效 → [第二节 🔴正文](#-正文填写问题最大坑) |
+| C | 发布流程弹窗 | 继续编辑、草稿弹窗、分卷向导、风险检测 → [第二节 🟡](#-草稿弹窗) |
+| D | 发布后章节=0 | 确认发布静默失败 → [第二节 🔴 发布设置](#-发布设置必须选是否使用ai) |
+| E | 章节管理选择器 | list-chapters空、chapter-info报错 → [第五节](#五章节管理-dom-参考) |
+| F | page.evaluate 报错 | ReferenceError: xxx is not defined → [第五节 F001](#f001pageevaluate-内禁用模板字符串插值) |
 
 ---
 
@@ -13,7 +26,8 @@
 | 登录页 | `https://fanqienovel.com/main/writer/login` |
 | 作品管理 | `https://fanqienovel.com/main/writer/book-manage` |
 | 发布章节（新建） | `https://fanqienovel.com/main/writer/{bookId}/publish/?enter_from=newchapter_1` |
-| 发布章节（复用草稿） | `https://fanqienovel.com/main/writer/{bookId}/publish/{itemId}?enter_from=newchapter_1` |
+| 编辑章节 | `https://fanqienovel.com/main/writer/{bookId}/publish/{chapterId}/?enter_from=modifychapter` |
+| 章节管理 | `https://fanqienovel.com/main/writer/chapter-manage/{bookId}` |
 
 ### DOM 选择器
 | 元素 | 选择器 |
@@ -26,25 +40,27 @@
 
 ### 发布步骤详解
 
-**第 0 步：进入发布页**
+**第 0 步：进入发布页，处理弹窗**
 ```js
-await page.goto(`https://fanqienovel.com/main/writer/${bookId}/publish/?enter_from=newchapter_1`, { waitUntil: 'networkidle' });
+await page.goto(`.../${bookId}/publish/?enter_from=newchapter_1`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(2000);
 await page.evaluate(() => document.querySelector('#___reactour')?.remove());
-// 如果弹出"有刚刚更新的草稿，是否继续编辑？"→ 点"放弃"开新章节
+// 新建章节：如弹"草稿"弹窗 → 点"放弃"
 if (await page.locator('button:has-text("放弃")').count() > 0) {
   await page.locator('button:has-text("放弃")').click();
-  await page.waitForTimeout(1000);
+}
+// 编辑已发布章节：如弹"继续编辑"弹窗 → 点"继续编辑"
+if (await page.locator('button:has-text("继续编辑")').count() > 0) {
+  await page.locator('button:has-text("继续编辑")').click();
 }
 ```
 
 **第 1 步：填章节序号**
 ```js
-// ⚠️ 必须用 focus() + keyboard.type，不能用 fill() 或 React setter
+// ⚠️ 必须用 focus() + keyboard.type，不能用 fill()
 await page.evaluate(() => document.querySelector('input.serial-input')?.focus());
 await page.keyboard.type('1');
 await page.keyboard.press('Tab');
-await page.waitForTimeout(200);
 ```
 
 **第 2 步：填章节标题**
@@ -52,81 +68,20 @@ await page.waitForTimeout(200);
 await page.evaluate(() => document.querySelector('input.serial-editor-input-hint-area')?.focus());
 await page.keyboard.type('章节标题');
 await page.keyboard.press('Tab');
-await page.waitForTimeout(200);
 ```
 
-**第 3 步：填正文（关键！）**
+**第 3 步：填正文（见第二节🔴正文）**
+
+**第 4 步：点"下一步" → 走发布流程**
 ```js
-// ⚠️ 必须先用 JS 把光标定位到编辑器末尾，再用 keyboard.type 分批输入
-await page.evaluate(() => {
-  const pm = document.querySelector('.syl-editor-container .ProseMirror');
-  pm.focus();
-  const sel = window.getSelection(), range = document.createRange();
-  range.selectNodeContents(pm);
-  range.collapse(false);
-  sel.removeAllRanges();
-  sel.addRange(range);
-});
-await page.waitForTimeout(300);
-// 分批输入，每批 80 字，避免超时
-for (let i = 0; i < content.length; i += 80) {
-  await page.keyboard.type(content.slice(i, i + 80), { delay: 0 });
-  await page.waitForTimeout(20);
+// 先检查"继续编辑"弹窗
+if (await page.locator('button:has-text("继续编辑")').count() > 0) {
+  await page.locator('button:has-text("继续编辑")').click();
+  await page.waitForTimeout(1000);
 }
-await page.waitForTimeout(2000);
-// 验证字数 >= 1000
-const wc = await page.evaluate(() => document.body.innerText.match(/正文字数\s*\n(\d+)/)?.[1] || '0');
+await page.locator('button:has-text("下一步")').first().click({ force: true });
+// 后续：分卷向导 → 风险检测弹窗(取消) → 发布设置(选AI=是) → 确认发布
 ```
-
-**第 4 步：点"下一步"**
-```js
-await page.locator('button:has-text("下一步")').first().click({ force: true, timeout: 8000 });
-await page.waitForTimeout(2500);
-```
-
-**第 5 步：走分卷向导（点两次"下一步"）**
-- 侧边弹出分卷向导（4 步），内容是作品大纲/人物卡片等，直接连点两次"下一步"跳过
-```js
-for (let i = 0; i < 2; i++) {
-  await page.locator('button:has-text("下一步")').last().click({ force: true, timeout: 5000 });
-  await page.waitForTimeout(2000);
-}
-```
-
-**第 6 步：风险检测弹窗 → 点"取消"跳过**
-- 弹窗内容："是否进行内容风险检测？开启后将消耗使用次数"
-- 点"取消"跳过，不影响发布
-```js
-if (btns.includes('确定') && btns.includes('取消')) {
-  await page.locator('button:has-text("取消")').last().click({ timeout: 5000 });
-  await page.waitForTimeout(2000);
-}
-```
-
-**第 7 步：发布设置弹窗 → 选"AI=是" → 点"确认发布"**
-- ⚠️ **必须先选"是否使用AI = 是"，否则发布失败（0章）**
-- AI 生成内容必须标注为 AI，避免版权问题
-```js
-// 选 AI = 是
-await page.evaluate(() => {
-  const items = Array.from(document.querySelectorAll('.arco-radio, .arco-radio-wrapper, label, span'));
-  for (const el of items) {
-    if (el.innerText?.trim() === '是' && el.offsetParent !== null) {
-      el.click();
-      return;
-    }
-  }
-});
-await page.waitForTimeout(500);
-// 确认发布
-await page.locator('button:has-text("确认发布")').first().click({ timeout: 8000 });
-await page.waitForTimeout(5000);
-```
-
-**发布成功标志：**
-- 弹窗关闭，页面跳转到章节管理界面
-- 章节状态显示"审核中"
-- 作品管理页显示"1 章"
 
 ---
 
@@ -134,134 +89,153 @@ await page.waitForTimeout(5000);
 
 ### 🔴 正文填写问题（最大坑）
 
-**❌ 以下方式全部无效（不触发 React state）：**
+**❌ 以下方式全部无效：**
 ```js
-// 无效1：clipboard 粘贴
-await page.evaluate(text => navigator.clipboard.writeText(text), content);
-await page.keyboard.press('Control+v');
-
-// 无效2：execCommand
-document.execCommand('insertText', false, text);  // 返回 false
-
-// 无效3：React nativeInputValueSetter
-const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-// 在 page.evaluate 中会报 TypeError: Illegal invocation
-
-// 无效4：直接 editor.fill()
-// ProseMirror 不是 input 元素，fill() 无效
-
-// 无效5：直接 editor.click() + keyboard.type
-// ❌ 因为编辑器第一个 <p> 里有 contenteditable="false" 的 ProseMirror-widget
-// 直接 click 后 keyboard.type 内容进不去，字数保持 0
+navigator.clipboard.writeText(text) + Ctrl+V  // 无效
+document.execCommand('insertText', ...)        // 返回 false
+editor.fill(text)                              // ProseMirror 不是 input
+editor.click() + keyboard.type()              // 字数仍为0
 ```
 
-**✅ 唯一有效方式：**
+**✅ 唯一有效方式：JS定位光标到末尾 + 分批 keyboard.type**
 ```js
-// 先用 JS 把光标定位到编辑器末尾（绕过 widget）
 await page.evaluate(() => {
   const pm = document.querySelector('.syl-editor-container .ProseMirror');
   pm.focus();
   const sel = window.getSelection(), range = document.createRange();
   range.selectNodeContents(pm);
-  range.collapse(false);
+  range.collapse(false); // 光标移到末尾
   sel.removeAllRanges();
   sel.addRange(range);
 });
-// 再分批 keyboard.type
 for (let i = 0; i < content.length; i += 80) {
   await page.keyboard.type(content.slice(i, i + 80), { delay: 0 });
   await page.waitForTimeout(20);
 }
 ```
 
-**根本原因：** ProseMirror 编辑器第一个 `<p>` 内嵌了 `contenteditable="false"` 的 widget（AI 提示占位符）。直接 click 后光标落在 widget 上而非可编辑区域，所有键盘输入被丢弃。必须用 `getSelection().addRange()` 手动把光标放到编辑器末尾。
+**根本原因：** ProseMirror 第一个 `<p>` 内嵌 `contenteditable="false"` 的 widget，直接 click 光标落在 widget 上，键盘输入全被丢弃。
+
+---
 
 ### 🔴 序号填写问题
 
-**❌ 无效方式：**
-```js
-// fill() 后 React 检测到的值是空的（显示验证错误"章节序号只支持阿拉伯数字"）
-await page.locator('input.serial-input').fill('1');
+**❌ fill() 无效**（React 检测到空值，报"章节序号只支持阿拉伯数字"）
 
-// React setter 在某些 evaluate 上下文报 Illegal invocation
-```
+**✅ focus() + keyboard.type()**
 
-**✅ 有效方式：**
-```js
-await page.evaluate(() => document.querySelector('input.serial-input')?.focus());
-await page.keyboard.type('1');
-await page.keyboard.press('Tab');
-```
+---
 
 ### 🔴 发布设置必须选"是否使用AI"
 
-- 不选"是/否"直接点"确认发布"：**弹窗关闭但章节不发布（0章）**
-- **必须选「是」（AI生成）**，再点"确认发布"
-- 选「否」会触发版权问题（声明非AI生成但内容由AI创作）
+- 不选直接点"确认发布"：**弹窗关闭但章节数=0（静默失败）**
+- 必须先选「是」再点确认发布
+
+---
 
 ### 🟡 草稿弹窗
 
-- 每次 goto 发布页，如果之前有未完成的草稿，会弹"是否继续编辑？"
-- 点"放弃"→ 开全新章节（推荐）
-- 点"继续编辑"→ 加载旧草稿，但正文 React state 仍为 0（草稿内容不同步到编辑器状态）
+- **新建章节**：弹"有草稿，是否继续编辑？" → 点**放弃**
+- **编辑已发布章节**：弹"有刚刚更新的章节，是否继续编辑？" → 点**继续编辑**
+- `runPublishFlow` 内每轮循环也要检测此弹窗（点"下一步"后可能再次弹出）
 
-### 🟡 每次 goto 创建新 chapterId
-
-- 每次访问 `…/publish/?enter_from=newchapter_1` 都会生成新的 chapterId
-- 不能分两次跑（第一次填内容，第二次提交）——第二次又是新 chapterId
-- **必须在同一个 browser session 里一次性完成填写+发布**
+---
 
 ### 🟡 分卷向导（每次发布都会出现）
 
-- 点"下一步"后，左侧弹出分卷向导侧边栏（4步：分卷/人物/世界观等）
-- 需要连点两次向导里的"下一步"才能到达风险检测弹窗
-- 这是每次发布都会出现的流程，无法跳过
+- 点"下一步"后侧边弹出分卷向导，需连点两次"下一步"跳过
+
+---
 
 ### 🟡 风险检测弹窗
 
-- 内容："是否进行内容风险检测？将消耗使用次数"
-- 不需要选，点"取消"跳过即可正常发布
+- "是否进行内容风险检测？" → 点"取消"跳过，不影响发布
+
+---
+
+### 🟡 每次 goto 创建新 chapterId
+
+- 必须在同一 browser session 内一次性完成填写+发布
 
 ---
 
 ## 三、登录方式
 
-**❌ 无法自动登录：**
-- 密码登录：页面强制要求手机验证码（"为保证账号安全，请使用手机验证码登录"）
-- 验证码登录：字节跳动检测到 headless UA，触发滑块验证码，无法自动解决
+**❌ 无法自动登录**（headless UA 触发滑块验证码）
 
 **✅ Cookie 方式：**
-1. 老板在真实浏览器登录番茄小说
-2. DevTools → Application → Cookies → 复制全部 Cookie 字符串
-3. 告诉秘书，秘书保存到 `~/.tomato-writer-session.json`
-4. Cookie 有效期约 60 天（sid_guard 字段为准）
+1. 真实浏览器登录 → DevTools → Application → Cookies → 复制全部
+2. `node scripts/tomato.js set-cookies "<cookie>"`
+3. 有效期约 60 天（sid_guard 字段为准）
+4. 保存位置：`~/.tomato-writer-session.json`
 
 ---
 
-## 四、保存草稿 API（可直接调用）
+## 四、保存草稿 API（备用）
 
-```js
+```
 POST /api/author/article/cover_article/v0/
-Content-Type: application/x-www-form-urlencoded
+book_id={bookId}&item_id={itemId}&title={title}&content={htmlContent}
+```
+- 只保存到服务端，不同步到浏览器 React state，**不能用于触发发布**
 
-aid=2503&app_name=muye_novel&book_id={bookId}&item_id={itemId}
-&title={title}&content={htmlContent}&volume_name={volumeName}&volume_id={volumeId}
+---
+
+## 五、章节管理 DOM 参考
+
+### 章节管理页结构（`/main/writer/chapter-manage/{bookId}`）
+
+| 元素 | 选择器 |
+|------|--------|
+| 外层容器 | `.chapter` |
+| 表格行 | `.arco-table-tr`（ArcoDesign 组件） |
+| 章节预览链接 | `a[href*="/preview/"]` |
+| 章节编辑链接 | `a[href*="/publish/"][href*="modifychapter"]` |
+| chapterId 提取 | `editLink.href.match(/\/publish\/(\d{10,})\//)` |
+
+**经验**：遇到选择器失效，优先用 `a[href]` 定位再 `.closest("tr")`，比猜 class 更稳定。
+
+---
+
+### E001｜list-chapters 返回空列表
+
+**原因**：用了 `.chapter-list-item` / `.chapter-row` 等不存在的 class
+**修复**：改为通过 `a[href*="/preview/"]` 定位行，再从 `td` 提取数据
+**状态**：✅ 已修复（2026-03-13）
+
+---
+
+### F001｜page.evaluate 内禁用模板字符串插值
+
+**症状**：`ReferenceError: xxx is not defined`
+
+**原因**：`page.evaluate` 在浏览器上下文执行，模板字符串 `${cid}` 被浏览器解析失败
+
+**❌ 错误写法：**
+```js
+page.evaluate((cid) => {
+  document.querySelector(`a[href*="/publish/${cid}/"]`)
+}, chapterId)
 ```
 
-- 返回 `{code:0, message:"success"}` = 成功
-- **注意：此 API 只保存到服务端，不同步到浏览器 React state，无法用于触发发布**
-- 用途：在填写正文之前预存内容备份，或更新标题
+**✅ 正确写法：**
+```js
+page.evaluate((cid) => {
+  const links = Array.from(document.querySelectorAll('a[href*="/publish/"]'));
+  links.find(a => a.href.includes('/publish/' + cid + '/'));
+}, chapterId)
+```
+
+**状态**：✅ 已记录（2026-03-13）
 
 ---
 
-## 五、作品信息（当前）
+### P001｜"继续编辑"弹窗导致 edit-chapter 流程卡死
 
-| 字段 | 值 |
-|------|-----|
-| 书名 | 全球升温，冰川融化，木筏开局 |
-| bookId | `7614138753522617369` |
-| volumeId | `7614138756739648537` |
-| volumeName | 第一卷：默认 |
-| 账号昵称 | 我是大龙虾 |
-| Cookie 文件 | `~/.tomato-writer-session.json` |
-| Cookie 到期 | 约 2026-05-11 |
+**症状**：`ok: false`，after 截图可见弹窗遮挡"下一步"，字数显示 0
+
+**原因**：编辑已发布章节时平台弹"有刚刚更新的章节，是否继续编辑？"，脚本未处理
+
+**修复**：`cmdEditChapter` 进入页面后检测并点"继续编辑"；`runPublishFlow` 每轮循环前也检测
+
+**状态**：✅ 已修复（2026-03-13）
