@@ -8,7 +8,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "番茄小说创作中心自动化工具：发布/修改/删除章节、分卷管理，基于 Playwright 浏览器自动化",
   "dependencies": {
     "playwright": "^1.58.2"
   }
