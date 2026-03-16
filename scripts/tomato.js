@@ -136,11 +136,11 @@ async function runPublishFlow(page) {
     console.error('[flow] 处理继续编辑弹窗');
   }
   await page.locator('button:has-text("下一步")').first().click({ force: true, timeout: 8000 });
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(3000);
 
   let published = false;
 
-  for (let step = 0; step < 12; step++) {
+  for (let step = 0; step < 20; step++) {
     // 每轮先检查"继续编辑"弹窗
     if (await page.locator('button:has-text("继续编辑")').count() > 0) {
       await page.locator('button:has-text("继续编辑")').click();
@@ -158,8 +158,12 @@ async function runPublishFlow(page) {
     const btnTexts = btns.map(b => b.t);
     console.error(`[flow step${step}] buttons: ${btnTexts.join(', ')}`);
 
-    // 找到"确认发布"→ 先选 AI=是，再点发布
-    const hasPub = btns.find(b => !b.d && ['确认发布', '立即发布', '发布'].includes(b.t));
+    // 非编辑器原生按钮（存草稿、下一步之外的按钮）= 弹窗按钮
+    const dialogBtns = btnTexts.filter(t => !['存草稿', '下一步'].includes(t));
+
+    // 1. 找到"确认发布"/"立即发布"/"发布"→ 先选 AI=是，再点发布
+    const pubKeywords = ['确认发布', '立即发布', '发布'];
+    const hasPub = btns.find(b => !b.d && pubKeywords.includes(b.t) && dialogBtns.includes(b.t));
     if (hasPub) {
       // 选"是"（AI生成）
       await page.evaluate(() => {
@@ -174,23 +178,49 @@ async function runPublishFlow(page) {
       await page.waitForTimeout(500);
 
       // 点确认发布
-      await page.locator(`button:has-text("${hasPub.t}")`).first().click({ timeout: 8000 });
+      await page.locator(`button:has-text("${hasPub.t}")`).last().click({ timeout: 8000 });
       await page.waitForTimeout(5000);
       published = true;
       break;
     }
 
-    // 风险检测弹窗（"是否进行内容风险检测？"）→ 取消跳过
-    if (btnTexts.includes('确定') && btnTexts.includes('取消') && !btnTexts.includes('确认发布')) {
-      console.error('[flow] 跳过风险检测');
+    // 2. 分卷向导"提交"按钮：弹窗有"提交"无发布按钮 → 点"提交"（不作为最终发布）
+    if (dialogBtns.includes('提交') && !dialogBtns.some(t => pubKeywords.includes(t))) {
+      console.error(`[flow] 点击弹窗"提交"（分卷向导），弹窗按钮: ${dialogBtns.join(', ')}`);
+      await page.locator('button:has-text("提交")').last().click({ force: true, timeout: 5000 });
+      await page.waitForTimeout(3000);
+      continue;
+    }
+
+    // 3. 写作检测弹窗：有"忽略全部"→ 点"忽略全部"跳过
+    if (dialogBtns.includes('忽略全部')) {
+      console.error('[flow] 跳过写作检测（忽略全部）');
+      await page.locator('button:has-text("忽略全部")').last().click({ force: true, timeout: 8000 });
+      await page.waitForTimeout(2000);
+      continue;
+    }
+
+    // 4. "我知道了"弹窗 → 点"我知道了"
+    if (dialogBtns.includes('我知道了')) {
+      console.error('[flow] 点击"我知道了"');
+      await page.locator('button:has-text("我知道了")').last().click({ timeout: 5000 });
+      await page.waitForTimeout(2000);
+      continue;
+    }
+
+    // 5. 风险检测弹窗：有"取消"无发布相关按钮无"提交" → 取消跳过
+    if (dialogBtns.includes('取消') && !dialogBtns.some(t => pubKeywords.includes(t)) && !dialogBtns.includes('提交')) {
+      console.error(`[flow] 跳过风险检测弹窗（取消），弹窗按钮: ${dialogBtns.join(', ')}`);
       await page.locator('button:has-text("取消")').last().click({ timeout: 5000 });
       await page.waitForTimeout(2000);
       continue;
     }
 
-    // 其他情况：点最后一个"下一步" / "确定" / "我知道了"
-    const nxt = btns.find(b => !b.d && ['下一步', '确定', '我知道了', '继续'].includes(b.t));
+    // 6. 其他情况：优先点"我知道了"，然后点最后一个"下一步" / "确定"
+    const nxt = btns.find(b => !b.d && ['我知道了', '确定', '继续'].includes(b.t))
+      || btns.find(b => !b.d && b.t === '下一步');
     if (nxt) {
+      console.error(`[flow] 点击按钮"${nxt.t}"`);
       await page.locator(`button:has-text("${nxt.t}")`).last().click({ force: true, timeout: 5000 });
       await page.waitForTimeout(2000);
     } else {
