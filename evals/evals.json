@@ -1,0 +1,39 @@
+{
+  "skill_name": "tomato-writer",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "我想看看我番茄小说上「全球升温，冰川融化，木筏开局」目前有哪些章节，作品的bookId是7614138753522617369",
+      "expected_output": "返回章节列表，包含章节数量、标题等信息；若无章节则说明当前0章",
+      "files": [],
+      "assertions": [
+        {"text": "调用了 list-chapters 命令（或等效操作）"},
+        {"text": "命令参数包含正确的 book-id 7614138753522617369"},
+        {"text": "输出结果包含章节数量或「暂无章节/0章」的有效信息"}
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "帮我在番茄小说上发一章新章节，bookId是7614138753522617369，标题叫「第1章 冰川开裂」，正文我已经写好了存在 /tmp/test-chapter.txt 里，直接读取这个文件发布",
+      "expected_output": "成功调用 publish-chapter，使用 --content-file 参数传入文件，发布成功返回 ok:true",
+      "files": [],
+      "assertions": [
+        {"text": "使用了 --content-file 参数传入正文，而非直接用 --content 字符串拼接"},
+        {"text": "调用了 publish-chapter 命令"},
+        {"text": "命令包含正确的 --book-id 7614138753522617369 和 --title 参数"},
+        {"text": "最终输出显示发布成功（ok:true 或类似成功标志）"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "把我番茄小说「全球升温，冰川融化，木筏开局」（bookId: 7614138753522617369）里最新那章的标题改成「第1章 裂变」",
+      "expected_output": "先调用 list-chapters 获取 chapterId，再调用 edit-chapter 修改标题成功",
+      "files": [],
+      "assertions": [
+        {"text": "先调用了 list-chapters 获取 chapterId，而不是凭空猜测 chapterId"},
+        {"text": "调用了 edit-chapter 命令"},
+        {"text": "edit-chapter 命令包含正确的 --chapter-id 和 --title \"第1章 裂变\" 参数"}
+      ]
+    }
+  ]
+}
